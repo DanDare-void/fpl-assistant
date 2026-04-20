@@ -22,6 +22,8 @@ from .routes.health import router as health_router
 from .routes.squad import router as squad_router
 from .routes.chat import router as chat_router
 from .routes.report import router as report_router
+from .routes.auth import router as auth_router
+from .routes.manage import router as manage_router
 
 
 # ---------------------------------------------------------------------------
@@ -121,6 +123,8 @@ app.include_router(health_router)
 app.include_router(squad_router)
 app.include_router(chat_router)
 app.include_router(report_router)
+app.include_router(auth_router)
+app.include_router(manage_router)
 
 # Serve built frontend — only if dist/ exists (skipped in dev)
 DIST_DIR = Path("frontend/dist")

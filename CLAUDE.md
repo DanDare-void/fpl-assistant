@@ -2,9 +2,10 @@
 
 ## Project Overview
 
-An AI-powered Fantasy Premier League assistant running on a Raspberry Pi 5 (4GB).
+An AI-powered Fantasy Premier League assistant running locally (Beelink mini PC, WSL2 Ubuntu).
 It fetches and caches FPL data, provides conversational analysis via a chat UI,
-and auto-generates weekly reports ahead of gameweek deadlines.
+auto-generates weekly reports, and supports authenticated team management (transfers,
+captain picks, chip activation) with a human-confirm flow.
 
 **Stack:** Python (FastAPI) backend + React frontend, served as a single deployable
 unit. Claude API (Anthropic) powers all AI analysis.
@@ -17,35 +18,38 @@ unit. Claude API (Anthropic) powers all AI analysis.
 fpl-assistant/
 ├── backend/
 │   ├── main.py                  # FastAPI app entrypoint
+│   ├── db.py                    # SQLite connection + schema init
 │   ├── fpl/
-│   │   ├── client.py            # FPL API HTTP client
+│   │   ├── client.py            # FPL API HTTP client (read, unauthenticated)
 │   │   ├── cache.py             # SQLite caching layer
 │   │   ├── models.py            # Pydantic models for FPL data
-│   │   └── enrichment.py        # Derived stats (form, FDR, value)
+│   │   ├── enrichment.py        # Derived stats (form, FDR, value)
+│   │   ├── session.py           # In-memory Bearer token store
+│   │   └── writer.py            # Authenticated FPL write client
 │   ├── claude/
 │   │   ├── client.py            # Anthropic API client (streaming)
 │   │   ├── context.py           # Builds structured FPL context for prompts
-│   │   └── prompts.py           # System prompts for chat and report modes
-│   ├── scheduler.py             # APScheduler — weekly report + cache refresh
+│   │   ├── prompts.py           # System prompts for chat and report modes
+│   │   └── planner.py           # Transfer + captain recommendation generator
 │   ├── routes/
 │   │   ├── chat.py              # POST /api/chat (SSE streaming)
-│   │   ├── report.py            # GET /api/report/latest
-│   │   ├── squad.py             # GET /api/squad, fixtures, players
-│   │   └── health.py            # GET /api/health
-│   └── db.py                    # SQLite connection + schema init
+│   │   ├── report.py            # GET /api/report/latest, POST /api/report/generate
+│   │   ├── squad.py             # GET /api/squad, /api/fixtures, /api/players, /api/fdr
+│   │   ├── health.py            # GET /api/health
+│   │   ├── auth.py              # POST/DELETE/GET /api/auth/session
+│   │   └── manage.py            # GET /api/manage/recommendations, POST confirm endpoints
+│   └── scheduler.py             # APScheduler — deferred, not yet implemented
 ├── frontend/
 │   ├── src/
 │   │   ├── App.jsx
-│   │   ├── components/
-│   │   │   ├── Chat.jsx         # Conversational chat interface
-│   │   │   ├── ReportPanel.jsx  # Weekly auto-generated report display
-│   │   │   ├── SquadView.jsx    # Current squad at-a-glance
-│   │   │   └── Fixtures.jsx     # Next 6 GW fixture difficulty
-│   │   └── api.js               # Frontend API client
+│   │   ├── api.js               # Frontend API client
+│   │   └── components/
+│   │       ├── Chat.jsx         # Conversational chat interface
+│   │       ├── ReportPanel.jsx  # Weekly auto-generated report display
+│   │       ├── SquadView.jsx    # Current squad at-a-glance
+│   │       ├── Fixtures.jsx     # Next 6 GW fixture difficulty (FDR table)
+│   │       └── Manage.jsx       # Team management — auth, recommendations, confirm
 │   └── dist/                    # Built static files (served by FastAPI)
-├── scripts/
-│   ├── setup_pi.sh              # Pi 5 initial setup script
-│   └── seed_cache.py            # Pre-populate SQLite on first run
 ├── .env.example
 ├── requirements.txt
 ├── package.json                 # Frontend build
@@ -58,12 +62,12 @@ fpl-assistant/
 
 ```env
 ANTHROPIC_API_KEY=sk-...          # Required — Anthropic API key
-FPL_TEAM_ID=12345                 # Your FPL team ID (find in the FPL URL)
-FPL_LEAGUE_ID=67890               # Your mini-league ID (optional)
+FPL_TEAM_ID=8201445               # FPL team ID
+FPL_LEAGUE_ID=                    # Mini-league ID (optional, not yet configured)
 CACHE_REFRESH_HOURS=4             # How often to refresh FPL data cache
 REPORT_HOURS_BEFORE_DEADLINE=24   # When to auto-generate the weekly report
 DATABASE_PATH=./data/fpl.db       # SQLite database location
-HOST=0.0.0.0                      # Bind address (0.0.0.0 for Pi network access)
+HOST=0.0.0.0
 PORT=8000
 ```
 
@@ -73,7 +77,7 @@ PORT=8000
 
 Base URL: `https://fantasy.premierleague.com/api/`
 
-All endpoints are public (no auth required for read operations).
+All read endpoints are public (no auth required).
 
 | Endpoint | Description |
 |---|---|
@@ -87,10 +91,28 @@ All endpoints are public (no auth required for read operations).
 | `leagues-classic/{league_id}/standings/` | Mini-league standings |
 | `element-summary/{player_id}/` | Full player history + fixtures |
 | `event/{gw}/live/` | Live gameweek scores |
-| `me/` | Your team data (requires session auth — write phase) |
+| `me/` | Authenticated user profile |
+| `my-team/{team_id}/` | Authenticated picks with selling prices |
+| `transfers/` | POST — submit transfers (authenticated) |
 
 **Important:** The FPL API is unofficial and undocumented. It can change without
 notice. Always handle HTTP errors and unexpected schema changes gracefully.
+
+### Authentication (write operations)
+
+FPL now uses **OAuth2 JWT Bearer tokens** via the `x-api-authorization` header.
+The old `pl_profile` + `sessionid` cookie approach no longer works.
+
+To get a token:
+1. Log into `fantasy.premierleague.com` in Chrome
+2. DevTools (F12) → Network → Fetch/XHR → refresh page
+3. Click any `/api/` request → Request Headers → copy `x-api-authorization` value
+
+Tokens expire after ~8 hours. The frontend stores them in `localStorage` and
+auto-submits on load. When expired, the user is dropped back to the login form.
+
+The token is stored **in memory only** on the backend (`backend/fpl/session.py`) —
+never persisted to disk or database.
 
 ---
 
@@ -98,127 +120,72 @@ notice. Always handle HTTP errors and unexpected schema changes gracefully.
 
 ### Models
 - **Haiku (`claude-haiku-4-5-20251001`)** — chat responses, quick lookups.
-  Fast and cheap, sufficient for most conversational queries.
-- **Sonnet (`claude-sonnet-4-6`)** — weekly report generation, deep analysis.
-  Used sparingly due to cost.
+- **Sonnet (`claude-sonnet-4-6`)** — weekly report generation, transfer planning.
 
 ### Chat (streaming)
-Use SSE streaming for all chat responses. The frontend expects `text/event-stream`.
-
-```python
-async with anthropic_client.messages.stream(
-    model="claude-haiku-4-5-20251001",
-    max_tokens=1024,
-    system=build_system_prompt(fpl_context),
-    messages=conversation_history,
-) as stream:
-    async for text in stream.text_stream:
-        yield f"data: {text}\n\n"
-```
+SSE streaming via `POST /api/chat`. Frontend expects `text/event-stream`.
 
 ### Context injection pattern
-Always inject structured FPL data into the system prompt, not the user message.
-The context builder (`claude/context.py`) should produce a compact JSON summary
-covering: current squad, budget, gameweek, upcoming fixtures (next 6 GW with FDR),
-top transfer targets by form/value, chip status, and mini-league position.
+Inject structured FPL data into the system prompt, not the user message.
+Context builder (`claude/context.py`) produces compact JSON: squad, budget,
+gameweek, FDR fixtures (next 6 GW), top transfer targets, chip status.
 
-Keep context under ~2000 tokens for Haiku chat. Sonnet reports can use more.
+Keep context under ~2000 tokens for Haiku chat. Sonnet can use more.
 
-### Weekly report prompt goal
-The report should cover: recommended transfers (with reasoning), captain pick,
-chip recommendation if applicable, players to watch, and fixture analysis for
-the next 3 gameweeks. Tone: concise, opinionated, like a trusted co-manager.
+### Transfer planner
+`claude/planner.py` uses Sonnet to produce structured JSON recommendations:
+captain, vice-captain, up to N transfers (N = free transfers available),
+chip suggestion, and a summary. Returns strict JSON — no prose.
+
+Transfers always target the **next** gameweek (`is_next=True`), not the current one.
 
 ---
 
 ## Data Layer (SQLite Cache)
 
-Cache aggressively — the FPL API can be slow and rate-limiting is a concern.
-
 | Table | Refresh frequency | Notes |
 |---|---|---|
 | `bootstrap` | Every 4 hours | Players, teams, GW info |
 | `fixtures` | Daily | Full season fixture list |
-| `squad` | Every 4 hours | Your current picks |
+| `squad` | Every 4 hours | Current picks |
 | `player_history` | On demand | Per-player detail, cache 24h |
 | `live_scores` | Every 5 mins during active GW | Only when a GW is live |
-| `reports` | Per generation | Store generated reports as text |
+| `reports` | Per generation | Stored as markdown text |
 
-Use a `cache_meta` table to track last-fetched timestamps per data type.
+Cache-first pattern throughout: serve stale data on FPL API failures rather than erroring.
 
 ---
 
-## Raspberry Pi 5 Deployment
+## Development
 
-Target: **Raspberry Pi 5, 4GB RAM**, running Raspberry Pi OS Lite (64-bit).
+### Running locally
+```bash
+# Backend
+source venv/bin/activate
+uvicorn backend.main:app --host 0.0.0.0 --port 8000
 
-### Services
-Run backend and frontend build as systemd services.
+# Frontend dev (hot reload, proxies /api to :8000)
+cd frontend && npm run dev
 
-```ini
-# /etc/systemd/system/fpl-assistant.service
-[Unit]
-Description=FPL Assistant Backend
-After=network.target
-
-[Service]
-WorkingDirectory=/home/pi/fpl-assistant
-EnvironmentFile=/home/pi/fpl-assistant/.env
-ExecStart=/home/pi/fpl-assistant/venv/bin/uvicorn backend.main:app --host 0.0.0.0 --port 8000
-Restart=on-failure
-User=pi
-
-[Install]
-WantedBy=multi-user.target
+# Frontend production build (served by FastAPI at :8000)
+cd frontend && npm run build
 ```
 
-### Network access
-The app binds to `0.0.0.0:8000`. Access locally on the home network or
-remotely via the WireGuard VPN already configured on the ASUS ZenWiFi XT9.
-
-### Resource constraints
-- Avoid keeping large in-memory datasets — use SQLite queries to fetch what's needed
-- Haiku responses are fast and cheap; don't batch unnecessary Sonnet calls
-- The Pi 5 4GB is comfortably sufficient for this workload
-
----
-
-## Development Conventions
-
-### Python
-- Python 3.11+
-- Use `async/await` throughout (FastAPI + httpx for async HTTP)
-- Pydantic v2 for all data models
-- Type hints everywhere
-- `ruff` for linting
-
-### React
-- React 18, functional components, hooks only
-- Tailwind CSS for styling
-- No heavy component libraries — keep the bundle small
-- `vite` for dev and build
-- Built dist served directly by FastAPI via `StaticFiles`
-
-### Error handling
-- FPL API failures should return stale cached data if available, never crash
-- Claude API errors should surface as user-friendly chat messages
-- Log to file (rotating, max 10MB) not just stdout on the Pi
-
-### Testing
-- Backend: `pytest` + `httpx` test client
-- FPL client: mock the HTTP responses, don't hit the real API in tests
-- Frontend: not required at this stage
+### Conventions
+- Python 3.12, `async/await` throughout, Pydantic v2, type hints, `ruff`
+- React 18, functional components + hooks, Tailwind CSS v3, Vite 5
+- FPL API failures → stale cache fallback, never 500
+- Claude API errors → user-friendly messages
+- Rotating log file (`logs/fpl-assistant.log`, max 10MB)
 
 ---
 
 ## Current Build Status
 
-- [ ] FPL data layer (client, cache, models)
-- [ ] FastAPI backend + routes
-- [ ] Claude integration (chat + report)
-- [ ] APScheduler (cache refresh + report generation)
-- [ ] React frontend (chat UI + report panel)
-- [ ] Pi deployment + systemd setup
-
-**Phase 2 (later):** Write layer — authenticated transfers, captain/bench changes,
-chip activation. Auth via FPL session cookie (`pl_profile` + `sessionid`).
+- [x] FPL data layer (client, cache, models, enrichment)
+- [x] FastAPI backend + routes
+- [x] Claude integration (chat + report + transfer planner)
+- [x] React frontend (Chat, Squad, Fixtures, Report, Manage tabs)
+- [x] Write layer (transfers, captain, bench — confirm flow)
+- [ ] APScheduler (cache refresh + report auto-generation) — deferred
+- [ ] Pi deployment — deferred indefinitely, running locally
