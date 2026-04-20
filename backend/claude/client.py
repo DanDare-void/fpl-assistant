@@ -10,6 +10,8 @@ from typing import Any, AsyncIterator
 
 import anthropic
 
+from ..db import log_token_usage
+
 logger = logging.getLogger(__name__)
 
 CHAT_MODEL = "claude-haiku-4-5-20251001"
@@ -44,6 +46,8 @@ class ClaudeClient:
             ) as stream:
                 async for text in stream.text_stream:
                     yield text
+                final = await stream.get_final_message()
+                await log_token_usage("chat", CHAT_MODEL, final.usage)
         except anthropic.APIStatusError as exc:
             logger.error("Anthropic API error during chat: %s", exc)
             yield f"\n\n[Error: Claude API returned {exc.status_code}. Please try again.]"
@@ -67,6 +71,7 @@ class ClaudeClient:
                 system=system_prompt,
                 messages=[{"role": "user", "content": context_message}],
             )
+            await log_token_usage("report", REPORT_MODEL, response.usage)
             return response.content[0].text
         except anthropic.APIStatusError as exc:
             logger.error("Anthropic API error during report generation: %s", exc)

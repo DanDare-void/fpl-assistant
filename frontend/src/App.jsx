@@ -4,6 +4,7 @@ import SquadView from './components/SquadView'
 import Fixtures from './components/Fixtures'
 import ReportPanel from './components/ReportPanel'
 import Manage from './components/Manage'
+import Admin from './components/Admin'
 
 const TABS = [
   { id: 'chat',     label: 'Chat' },
@@ -11,6 +12,7 @@ const TABS = [
   { id: 'fixtures', label: 'Fixtures' },
   { id: 'report',   label: 'Report' },
   { id: 'manage',   label: 'Manage' },
+  { id: 'admin',    label: 'Admin' },
 ]
 
 export default function App() {
@@ -51,6 +53,7 @@ export default function App() {
         {tab === 'fixtures' && <div className="flex-1 overflow-y-auto"><Fixtures /></div>}
         {tab === 'report'   && <div className="flex-1 overflow-y-auto"><ReportPanel /></div>}
         {tab === 'manage'   && <div className="flex-1 overflow-y-auto"><Manage /></div>}
+        {tab === 'admin'    && <div className="flex-1 overflow-y-auto"><Admin /></div>}
       </main>
     </div>
   )

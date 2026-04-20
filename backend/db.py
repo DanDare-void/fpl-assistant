@@ -1,8 +1,11 @@
+import logging
 import os
 import aiosqlite
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import AsyncIterator
+from typing import Any, AsyncIterator
+
+logger = logging.getLogger(__name__)
 
 DATABASE_PATH = os.getenv("DATABASE_PATH", "./data/fpl.db")
 
@@ -62,5 +65,43 @@ async def init_db() -> None:
                 content     TEXT NOT NULL,
                 created_at  TEXT NOT NULL
             );
+
+            CREATE TABLE IF NOT EXISTS token_usage (
+                id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                created_at      TEXT NOT NULL DEFAULT (datetime('now')),
+                call_type       TEXT NOT NULL,
+                model           TEXT NOT NULL,
+                input_tokens    INTEGER NOT NULL,
+                output_tokens   INTEGER NOT NULL,
+                cache_read      INTEGER NOT NULL DEFAULT 0,
+                cache_write     INTEGER NOT NULL DEFAULT 0
+            );
         """)
         await db.commit()
+
+
+async def log_token_usage(
+    call_type: str,
+    model: str,
+    usage: Any,
+) -> None:
+    """Record Claude API token usage. usage is the anthropic Usage object."""
+    try:
+        async with get_db() as db:
+            await db.execute(
+                """
+                INSERT INTO token_usage (call_type, model, input_tokens, output_tokens, cache_read, cache_write)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    call_type,
+                    model,
+                    getattr(usage, "input_tokens", 0),
+                    getattr(usage, "output_tokens", 0),
+                    getattr(usage, "cache_read_input_tokens", 0),
+                    getattr(usage, "cache_creation_input_tokens", 0),
+                ),
+            )
+            await db.commit()
+    except Exception as exc:
+        logger.warning("Failed to log token usage: %s", exc)
