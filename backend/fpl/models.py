@@ -24,13 +24,14 @@ class Team(BaseModel):
     id: int
     name: str
     short_name: str
-    strength: int
-    strength_overall_home: int
-    strength_overall_away: int
-    strength_attack_home: int
-    strength_attack_away: int
-    strength_defence_home: int
-    strength_defence_away: int
+    # Strength ratings are null/zero preseason until Opta sets them
+    strength: int | None = None
+    strength_overall_home: int = 0
+    strength_overall_away: int = 0
+    strength_attack_home: int = 0
+    strength_attack_away: int = 0
+    strength_defence_home: int = 0
+    strength_defence_away: int = 0
 
 
 # ---------------------------------------------------------------------------
@@ -85,6 +86,24 @@ class Player(BaseModel):
     news: str
     chance_of_playing_next_round: int | None = None
     chance_of_playing_this_round: int | None = None
+    # Defaults below keep cached bootstrap rows from before 2026/27 valid
+    starts: int = 0
+    defensive_contribution: int = 0                 # DEFCON points scored
+    defensive_contribution_per_90: float = 0.0
+    tackles: int = 0
+    clearances_blocks_interceptions: int = 0
+    recoveries: int = 0
+    expected_goals: str = "0.0"
+    expected_assists: str = "0.0"
+    expected_goal_involvements: str = "0.0"
+    expected_goals_conceded: str = "0.0"
+    ep_this: str | None = None                      # FPL's expected points, this GW
+    ep_next: str | None = None                      # FPL's expected points, next GW
+    cost_change_event: int = 0
+    cost_change_start: int = 0
+    value_form: str = "0.0"
+    value_season: str = "0.0"
+    price_change_percent: str | None = None         # new 2026/27 price-prediction signal
 
     @property
     def cost(self) -> float:
@@ -109,6 +128,33 @@ class Player(BaseModel):
         """Points per game per million — a simple value metric."""
         return round(self.ppg_float / self.cost, 3) if self.cost else 0.0
 
+    @property
+    def ep_next_float(self) -> float:
+        try:
+            return float(self.ep_next or 0)
+        except ValueError:
+            return 0.0
+
+    @property
+    def xgi_float(self) -> float:
+        try:
+            return float(self.expected_goal_involvements)
+        except ValueError:
+            return 0.0
+
+
+# ---------------------------------------------------------------------------
+# Bootstrap — chips
+# ---------------------------------------------------------------------------
+
+class Chip(BaseModel):
+    id: int
+    name: str                       # "wildcard", "freehit", "bboost", "3xc"
+    number: int
+    start_event: int
+    stop_event: int
+    chip_type: str                  # "transfer" or "team"
+
 
 # ---------------------------------------------------------------------------
 # Bootstrap — full response
@@ -119,6 +165,10 @@ class Bootstrap(BaseModel):
     teams: list[Team]
     elements: list[Player]
     element_types: list[ElementType]
+    # Season rules straight from the API — defaults keep pre-2026/27 cache rows valid
+    chips: list[Chip] = Field(default_factory=list)
+    game_settings: dict[str, Any] = Field(default_factory=dict)
+    game_config: dict[str, Any] = Field(default_factory=dict)
 
 
 # ---------------------------------------------------------------------------

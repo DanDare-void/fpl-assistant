@@ -80,7 +80,7 @@ The JSON must match this exact schema:
 Additional rules:
 - captain and vice_captain MUST be players currently in current_squad.
 - transfers may be [] if no moves are worthwhile.
-- chip name must be one of: "wildcard", "freehit", "bboost", "3xc", or null.
+- chip name must be one of: __CHIP_OPTIONS__, or null.
 - budget_check: fill in with the exact values from your selected transfers.
   total_sold_millions = sum of out_selling_price_millions for selected transfers.
   total_bought_millions = sum of in_cost_millions for selected transfers.
@@ -215,6 +215,7 @@ async def generate_squad(
 async def generate_recommendations(
     planning_data: dict[str, Any],
     free_transfers: int,
+    available_chips: list[str] | None = None,
 ) -> dict[str, Any]:
     """
     Ask Claude to generate transfer + captain recommendations.
@@ -223,10 +224,23 @@ async def generate_recommendations(
         planning_data: Pre-computed budget info, squad with selling prices,
                        and ranked transfer options. All numbers verified.
         free_transfers: Number of free transfers available.
+        available_chips: Chip names playable this gameweek, from the FPL API.
+                         None falls back to the standard chip set; an empty
+                         list means no chip may be recommended.
 
     Returns:
         Parsed recommendation dict matching the schema above.
     """
+    if available_chips is None:
+        available_chips = ["wildcard", "freehit", "bboost", "3xc"]
+    if available_chips:
+        chip_options = ", ".join(f'"{c}"' for c in available_chips)
+        system_prompt = PLANNER_SYSTEM_PROMPT.replace("__CHIP_OPTIONS__", chip_options)
+    else:
+        system_prompt = PLANNER_SYSTEM_PROMPT.replace(
+            "- chip name must be one of: __CHIP_OPTIONS__, or null.",
+            "- no chips are available this gameweek — chip name must be null.",
+        )
     prompt = (
         f"Free transfers available at zero cost: {free_transfers}\n\n"
         f"Planning data (all prices exact — use them verbatim, do not recalculate):\n"
@@ -243,7 +257,7 @@ async def generate_recommendations(
         response = await client.messages.create(
             model=PLANNER_MODEL,
             max_tokens=PLANNER_MAX_TOKENS,
-            system=PLANNER_SYSTEM_PROMPT,
+            system=system_prompt,
             messages=[{"role": "user", "content": prompt}],
         )
         logger.info("Claude stop_reason=%s content_blocks=%d", response.stop_reason, len(response.content))
@@ -271,7 +285,6 @@ async def generate_recommendations(
 
         # Server-side verify Claude's budget_check arithmetic
         if "budget_check" in result and "transfers" in result:
-            bc = result["budget_check"]
             total_sold = sum(t.get("out_selling_price_millions", 0) for t in result["transfers"])
             total_bought = sum(t.get("in_cost_millions", 0) for t in result["transfers"])
             bank = planning_data.get("bank_millions", 0)

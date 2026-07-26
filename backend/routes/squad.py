@@ -72,7 +72,9 @@ async def get_squad(request: Request) -> dict:
         bootstrap = await _get_bootstrap(client)
         fixtures = await _get_fixtures(client)
 
-        # Determine current gameweek
+        # Determine current gameweek. No is_current event means preseason —
+        # the public picks endpoint 404s until the GW1 deadline passes.
+        is_preseason = not any(gw.is_current for gw in bootstrap.events)
         current_gw = next(
             (gw.id for gw in bootstrap.events if gw.is_current),
             next((gw.id for gw in bootstrap.events if gw.is_next), 1),
@@ -93,6 +95,22 @@ async def get_squad(request: Request) -> dict:
                 if stale:
                     from ..fpl.models import Squad
                     squad = Squad.model_validate(stale)
+                elif is_preseason:
+                    return {
+                        "gameweek": current_gw,
+                        "preseason": True,
+                        "message": (
+                            "The season hasn't started yet — squad picks become "
+                            "available after the first deadline. Use the Manage tab "
+                            "to view or build your team in the meantime."
+                        ),
+                        "bank": 0.0,
+                        "squad_value": 0.0,
+                        "active_chip": None,
+                        "event_transfers": 0,
+                        "transfer_cost": 0,
+                        "players": [],
+                    }
                 else:
                     raise HTTPException(status_code=503, detail="Squad data unavailable") from exc
 

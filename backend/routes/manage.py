@@ -11,10 +11,9 @@ from typing import Any
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-from ..claude.context import build_context
 from ..claude.planner import generate_recommendations, generate_squad
 from ..fpl import cache
-from ..fpl.client import FPLClient, FPLClientError
+from ..fpl.client import FPLClient
 from ..fpl.enrichment import enrich_players
 from ..fpl.models import Bootstrap, Fixture, Squad
 from ..fpl.session import get_session, is_authenticated
@@ -251,22 +250,40 @@ async def get_recommendations() -> dict:
     # Final ranked list: best option per player first, then alternatives
     ranked_transfers = top_per_player + rest[:20]
 
+    # Chips playable next GW: bootstrap defines each chip's window; the
+    # my-team response is authoritative on which the entry has already used.
+    next_gw = next(
+        (gw.id for gw in bootstrap.events if gw.is_next),
+        next((gw.id for gw in bootstrap.events if gw.is_current), 1),
+    )
+    window_chips = {
+        c.name for c in bootstrap.chips if c.start_event <= next_gw <= c.stop_event
+    }
+    team_chips = my_team.get("chips") or []
+    if team_chips:
+        unused = {c["name"] for c in team_chips if c.get("status_for_entry") == "available"}
+        available_chips = sorted(unused & window_chips if window_chips else unused)
+    else:
+        available_chips = sorted(window_chips)
+
     planning_data = {
         "bank_millions": bank_m,
         "free_transfers": free_transfers,
         "total_possible_budget_millions": round(max_budget_tenths / 10, 1),
         "current_squad": squad_with_prices,
         "ranked_transfer_options": ranked_transfers,
+        "available_chips": available_chips,
     }
 
     try:
-        recs = await generate_recommendations(planning_data, free_transfers)
+        recs = await generate_recommendations(planning_data, free_transfers, available_chips)
     except RuntimeError as exc:
         raise HTTPException(status_code=500, detail=str(exc))
 
     return {
         "recommendations": recs,
         "free_transfers": free_transfers,
+        "available_chips": available_chips,
     }
 
 
@@ -290,6 +307,15 @@ async def confirm_transfers(body: ConfirmTransferRequest) -> dict:
         (gw.id for gw in bootstrap.events if gw.is_next),
         next((gw.id for gw in bootstrap.events if gw.is_current), 1),
     )
+
+    # Reject chip names the season doesn't have before they reach FPL
+    if body.chip:
+        valid_chips = {c.name for c in bootstrap.chips}
+        if valid_chips and body.chip not in valid_chips:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Unknown chip '{body.chip}'. This season's chips: {sorted(valid_chips)}.",
+            )
 
     # Re-fetch live my-team data so selling prices and squad membership are authoritative
     async with FPLWriter(session) as writer:
@@ -330,7 +356,6 @@ async def confirm_transfers(body: ConfirmTransferRequest) -> dict:
         # Budget check — simulate running balance across chained transfers
         balance_after = bank + actual_selling_price - actual_purchase_price
         if balance_after < 0:
-            from ..fpl.models import Player as FPLPlayer
             p_in = next((p for p in bootstrap.elements if p.id == t["element_in"]), None)
             p_out = next((p for p in bootstrap.elements if p.id == t["element_out"]), None)
             raise HTTPException(

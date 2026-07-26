@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from .models import Bootstrap, Fixture, Player, Team
+from .models import Bootstrap, Fixture
 
 
 # ---------------------------------------------------------------------------
@@ -122,6 +122,12 @@ def enrich_players(
             "clean_sheets": player.clean_sheets,
             "status": player.status,
             "news": player.news,
+            "ep_next": player.ep_next_float,
+            "xgi": player.xgi_float,
+            "defcon": player.defensive_contribution,
+            "defcon_per_90": player.defensive_contribution_per_90,
+            "starts": player.starts,
+            "price_change_percent": player.price_change_percent,
             "chance_next": player.chance_of_playing_next_round,
             "transfers_in_gw": player.transfers_in_event,
             "transfers_out_gw": player.transfers_out_event,
@@ -145,23 +151,32 @@ def top_transfer_targets(
     """
     Rank players by a composite score: form + value_score, weighted by FDR.
 
+    Preseason (and the first weeks of a season) every player's form is 0.0,
+    so ranking falls back to FPL's own expected points (ep_next), which is
+    populated before a ball is kicked.
+
     Filters:
       - Only available players (status == 'a')
       - Optional max cost filter
       - Optional position filter (GKP/DEF/MID/FWD)
     """
+    has_form = any(p["form"] > 0 for p in enriched_players)
+
     candidates = [
         p for p in enriched_players
         if p["status"] == "a"
         and (budget_max is None or p["cost"] <= budget_max)
         and (position is None or p["position"] == position)
-        and p["form"] > 0
+        and (p["form"] > 0 if has_form else p["ep_next"] > 0)
     ]
 
     def score(p: dict[str, Any]) -> float:
-        # Reward form and value, penalise tough upcoming fixtures
-        fdr_penalty = (p["avg_fdr_3gw"] - 3) * 0.5  # 0 at FDR=3, +1 at FDR=5
-        return p["form"] + p["value_score"] * 2 - fdr_penalty
+        # Penalise tough upcoming fixtures: 0 at FDR=3, +1 at FDR=5
+        fdr_penalty = (p["avg_fdr_3gw"] - 3) * 0.5
+        if has_form:
+            return p["form"] + p["value_score"] * 2 - fdr_penalty
+        # Preseason: expected points, with ownership as a weak tiebreak
+        return p["ep_next"] + p["selected_by_pct"] * 0.02 - fdr_penalty
 
     candidates.sort(key=score, reverse=True)
     return candidates[:limit]
