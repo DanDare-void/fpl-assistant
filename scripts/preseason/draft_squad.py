@@ -83,6 +83,10 @@ fmult = {tid: 1 + (3.0 - (sum(v)/len(v) if v else 3.0)) * 0.06 for tid, v in fdr
 
 PROMOTED = {'COV', 'HUL', 'IPS'}  # no 25/26 PL data
 
+# Tournament-form prior (2026 World Cup): multiplicative bump on projection,
+# for players whose summer form isn't captured by last-season PL data.
+FORM_PRIOR = {'Haaland': 1.08}
+
 players = []
 for e in d['elements']:
     if e['status'] not in ('a', 'd') or e.get('removed'):
@@ -108,7 +112,7 @@ for e in d['elements']:
         continue
     if e['status'] == 'd':
         base *= 0.85  # doubtful flag
-    proj = base * fmult[e['team']]
+    proj = base * fmult[e['team']] * FORM_PRIOR.get(e['web_name'], 1.0)
     players.append({
         'id': e['id'], 'name': e['web_name'], 'pos': p, 'team': tm, 'tid': e['team'],
         'price': price, 'sel': sel, 'proj': round(proj, 1),
