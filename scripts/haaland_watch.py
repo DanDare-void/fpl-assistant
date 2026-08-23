@@ -20,6 +20,7 @@ old Tissue cron emails.
 Usage: python3 haaland_watch.py [--print]   (--print skips the email)
 """
 import json
+import os
 import smtplib
 import sys
 import traceback
@@ -51,8 +52,16 @@ def load_env(path):
     return env
 
 
+def smtp_creds():
+    # Prefer environment (k8s Secret in-cluster); fall back to the .env file
+    # (local run on pi-a). Same script works in both homes.
+    if os.environ.get('EMAIL_USER') and os.environ.get('EMAIL_PASSWORD'):
+        return {k: os.environ.get(k) for k in ('EMAIL_USER', 'EMAIL_PASSWORD', 'EMAIL_TO')}
+    return load_env(ENV_PATH) if ENV_PATH.exists() else {}
+
+
 def send_email(subject, body):
-    env = load_env(ENV_PATH)
+    env = smtp_creds()
     user, password = env.get('EMAIL_USER'), env.get('EMAIL_PASSWORD')
     if not user or not password:
         print('email not configured — skipping send')

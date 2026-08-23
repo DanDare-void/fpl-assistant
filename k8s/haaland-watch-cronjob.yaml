@@ -1,0 +1,38 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: haaland-watch
+  namespace: football
+spec:
+  # Tuesday 08:17 London time — after the GW settles. Matches the old pi-a crontab.
+  schedule: "17 8 * * 2"
+  timeZone: "Europe/London"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      template:
+        spec:
+          restartPolicy: OnFailure
+          containers:
+            - name: haaland-watch
+              image: python:3.12-slim
+              command: ["python", "/app/haaland_watch.py"]
+              envFrom:
+                - secretRef:
+                    name: haaland-smtp
+              volumeMounts:
+                - name: script
+                  mountPath: /app
+              resources:
+                requests:
+                  cpu: "50m"
+                  memory: "64Mi"
+                limits:
+                  memory: "128Mi"
+          volumes:
+            - name: script
+              configMap:
+                name: haaland-watch-script
