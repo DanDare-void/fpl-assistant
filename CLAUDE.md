@@ -188,4 +188,24 @@ cd frontend && npm run build
 - [x] React frontend (Chat, Squad, Fixtures, Report, Manage tabs)
 - [x] Write layer (transfers, captain, bench — confirm flow)
 - [ ] APScheduler (cache refresh + report auto-generation) — deferred
-- [ ] Pi deployment — deferred indefinitely, running locally
+- [x] Cluster deployment — runs on the keel k3s cluster (see below)
+
+---
+
+## Deployment (keel cluster)
+
+The app runs on the home k3s cluster (repo: `~/projects/keel-cluster`) as a single
+pinned Deployment. See `docs/adr/DECISIONS.md` ADR 0002 for the full rationale.
+
+- **URL:** `http://192.168.50.46:30080` (NodePort — any node IP works, LAN only)
+- **Manifests:** `k8s/fpl-assistant.yaml` (namespace `football`, pinned to keel-w5,
+  SQLite on a `local-path` PV at `/app/data`)
+- **Secret:** `fpl-assistant-env`, created from the local `.env`, never committed
+- **Deploy/update:** `scripts/deploy-cluster.sh` — rsyncs source to keel-w5, builds
+  the `Dockerfile` there with podman (native arm64), imports the image into k3s
+  containerd (no registry), applies manifests, restarts the deployment
+- The Haaland watch CronJob (`k8s/haaland-watch-cronjob.yaml`) is separate and
+  unaffected by app deploys
+
+Local dev on the Beelink still works exactly as below — the cluster copy has its own
+database and doesn't share state with a locally-run instance.

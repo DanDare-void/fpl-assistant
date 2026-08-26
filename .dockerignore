@@ -1,0 +1,13 @@
+.git
+venv
+data
+logs
+.env
+k8s
+docs
+scripts
+frontend/node_modules
+frontend/dist
+**/__pycache__
+**/*.pyc
+*Zone.Identifier

@@ -1,0 +1,102 @@
+# FPL assistant — API + frontend, single replica pinned to keel-w5.
+#
+# The image is built natively on keel-w5 and imported straight into k3s's
+# containerd (no registry) — see scripts/deploy-cluster.sh. Hence
+# imagePullPolicy: Never and the localhost/ image name podman assigns.
+#
+# Pinned to keel-w5 because SQLite lives on a local-path PV, which is
+# node-local; keel-w5 has the NVMe disk. Strategy is Recreate so two pods
+# never share the SQLite file.
+#
+# The Secret fpl-assistant-env is created from the local .env and never
+# committed:
+#   kubectl -n football create secret generic fpl-assistant-env --from-env-file=.env
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: fpl-assistant-data
+  namespace: football
+spec:
+  accessModes: ["ReadWriteOnce"]
+  storageClassName: local-path
+  resources:
+    requests:
+      storage: 5Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: fpl-assistant
+  namespace: football
+  labels:
+    app: fpl-assistant
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: fpl-assistant
+  template:
+    metadata:
+      labels:
+        app: fpl-assistant
+    spec:
+      nodeSelector:
+        kubernetes.io/hostname: keel-w5
+      containers:
+        - name: fpl-assistant
+          image: localhost/fpl-assistant:dev
+          imagePullPolicy: Never
+          ports:
+            - containerPort: 8000
+          envFrom:
+            - secretRef:
+                name: fpl-assistant-env
+          env:
+            - name: DATABASE_PATH
+              value: /app/data/fpl.db
+          volumeMounts:
+            - name: data
+              mountPath: /app/data
+            - name: logs
+              mountPath: /app/logs
+          readinessProbe:
+            httpGet:
+              path: /api/health
+              port: 8000
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /api/health
+              port: 8000
+            initialDelaySeconds: 30
+            periodSeconds: 30
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              memory: 512Mi
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: fpl-assistant-data
+        - name: logs
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: fpl-assistant
+  namespace: football
+spec:
+  type: NodePort
+  selector:
+    app: fpl-assistant
+  ports:
+    - port: 8000
+      targetPort: 8000
+      nodePort: 30080
