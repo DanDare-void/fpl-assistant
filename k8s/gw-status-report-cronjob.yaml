@@ -1,0 +1,46 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: gw-status-report
+  namespace: football
+spec:
+  # Tuesday 08:25 London — right after the 08:17 Haaland watch, so the two
+  # mails land together after the GW settles. Feeds the Friday pre-deadline
+  # session. Same email channel (Secret haaland-smtp).
+  # Script ConfigMap is created from the repo file:
+  #   kubectl -n football create configmap gw-report-script \
+  #     --from-file=scripts/gw_status_report.py
+  schedule: "25 8 * * 2"
+  timeZone: "Europe/London"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      template:
+        spec:
+          restartPolicy: OnFailure
+          containers:
+            - name: gw-status-report
+              image: python:3.12-slim
+              command: ["python", "/app/gw_status_report.py"]
+              envFrom:
+                - secretRef:
+                    name: haaland-smtp
+              env:
+                - name: FPL_TEAM_ID
+                  value: "8201445"
+              volumeMounts:
+                - name: script
+                  mountPath: /app
+              resources:
+                requests:
+                  cpu: "50m"
+                  memory: "64Mi"
+                limits:
+                  memory: "128Mi"
+          volumes:
+            - name: script
+              configMap:
+                name: gw-report-script
