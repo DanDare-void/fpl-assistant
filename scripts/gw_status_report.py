@@ -24,7 +24,7 @@ from pathlib import Path
 
 API = 'https://fantasy.premierleague.com/api'
 ENV_PATH = Path.home() / 'the-tissue' / '.env'
-TEAM_ID = os.environ.get('FPL_TEAM_ID', '8201445')
+TEAM_ID = os.environ.get('FPL_TEAM_ID', '8414272')
 
 RETURN_PTS = 6        # a starter at/above this "did"
 BLANK_PTS = 2         # a starter at/below this "didn't"
@@ -241,6 +241,9 @@ def main():
     try:
         verdict, body = build_report()
         subject = f'FPL status — {verdict}'
+        note = os.environ.get('REPORT_NOTE')
+        if note:
+            body = f'** {note} **\n\n{body}'
     except Exception:
         body = ('The GW status report cron failed:\n\n' + traceback.format_exc()
                 + '\nCheck: kubectl -n football logs job/<latest gw-status-report job>')

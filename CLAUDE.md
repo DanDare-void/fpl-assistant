@@ -62,7 +62,7 @@ fpl-assistant/
 
 ```env
 ANTHROPIC_API_KEY=sk-...          # Required — Anthropic API key
-FPL_TEAM_ID=8201445               # FPL team ID
+FPL_TEAM_ID=8414272               # FPL team ID — REASSIGNED EVERY SEASON, update each August (2026/27: WeComeInPeace)
 FPL_LEAGUE_ID=                    # Mini-league ID (optional, not yet configured)
 CACHE_REFRESH_HOURS=4             # How often to refresh FPL data cache
 REPORT_HOURS_BEFORE_DEADLINE=24   # When to auto-generate the weekly report

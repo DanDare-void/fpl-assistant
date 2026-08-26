@@ -30,7 +30,7 @@ spec:
                     name: haaland-smtp
               env:
                 - name: FPL_TEAM_ID
-                  value: "8201445"
+                  value: "8414272"
               volumeMounts:
                 - name: script
                   mountPath: /app
