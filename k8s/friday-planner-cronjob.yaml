@@ -1,0 +1,44 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: friday-planner
+  namespace: football
+spec:
+  # Friday 08:30 London — most GW deadlines are Friday evening or Saturday,
+  # so the proposal lands in time either way. It calls the app's public
+  # /api/manage/preview (one Sonnet call inside the app) and emails the
+  # proposed transfers/captain/chip. Proposal only — nothing is submitted.
+  # Script ConfigMap is created from the repo file:
+  #   kubectl -n football create configmap friday-planner-script \
+  #     --from-file=scripts/friday_planner_email.py
+  schedule: "30 8 * * 5"
+  timeZone: "Europe/London"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      template:
+        spec:
+          restartPolicy: OnFailure
+          containers:
+            - name: friday-planner
+              image: python:3.12-slim
+              command: ["python", "/app/friday_planner_email.py"]
+              envFrom:
+                - secretRef:
+                    name: haaland-smtp
+              volumeMounts:
+                - name: script
+                  mountPath: /app
+              resources:
+                requests:
+                  cpu: "50m"
+                  memory: "64Mi"
+                limits:
+                  memory: "128Mi"
+          volumes:
+            - name: script
+              configMap:
+                name: friday-planner-script

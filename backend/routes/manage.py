@@ -128,24 +128,13 @@ async def build_squad(budget: float = 100.0) -> dict:
 # Recommendations
 # ---------------------------------------------------------------------------
 
-@router.get("/api/manage/recommendations")
-async def get_recommendations() -> dict:
+async def _build_recommendations(my_team: dict, bootstrap: Bootstrap, fixtures: list[Fixture]) -> dict:
+    """Build planning data from a my-team-shaped dict and ask the planner.
+
+    `my_team` needs picks (with selling_price), transfers (limit/bank), chips.
+    The authenticated endpoint passes the real my-team response; the preview
+    endpoint synthesizes one from public data.
     """
-    Ask Claude for transfer + captain recommendations.
-    Requires valid session to fetch selling prices from my-team endpoint.
-    """
-    session = _require_auth()
-    team_id = _team_id()
-
-    bootstrap, fixtures, squad = await _load_fpl_data()
-
-    # Fetch authenticated my-team data (includes selling prices)
-    async with FPLWriter(session) as writer:
-        try:
-            my_team = await writer.get_my_team(team_id)
-        except FPLWriteError as exc:
-            raise HTTPException(status_code=401, detail=str(exc))
-
     enriched = enrich_players(bootstrap, fixtures)
     player_map = {p["id"]: p for p in enriched}
 
@@ -285,6 +274,83 @@ async def get_recommendations() -> dict:
         "free_transfers": free_transfers,
         "available_chips": available_chips,
     }
+
+
+@router.get("/api/manage/recommendations")
+async def get_recommendations() -> dict:
+    """
+    Ask Claude for transfer + captain recommendations.
+    Requires valid session to fetch selling prices from my-team endpoint.
+    """
+    session = _require_auth()
+    team_id = _team_id()
+
+    bootstrap, fixtures, _squad = await _load_fpl_data()
+
+    # Fetch authenticated my-team data (includes selling prices)
+    async with FPLWriter(session) as writer:
+        try:
+            my_team = await writer.get_my_team(team_id)
+        except FPLWriteError as exc:
+            raise HTTPException(status_code=401, detail=str(exc))
+
+    return await _build_recommendations(my_team, bootstrap, fixtures)
+
+
+@router.get("/api/manage/preview")
+async def preview_recommendations() -> dict:
+    """
+    Unauthenticated planner preview from public data only. Selling prices are
+    approximated by current price (exact ones need an authenticated session)
+    and free transfers are estimated from transfer history — good enough for
+    the Friday pre-deadline email; the confirm flow always re-checks live.
+    """
+    team_id = _team_id()
+    bootstrap, fixtures, _squad = await _load_fpl_data()
+
+    gw = next(
+        (g.id for g in bootstrap.events if g.is_current),
+        max((g.id for g in bootstrap.events if g.finished), default=0),
+    )
+    if not gw:
+        raise HTTPException(status_code=400, detail="Season has not started yet.")
+
+    async with FPLClient() as client:
+        squad = await client.get_squad(team_id, gw)
+        history = await client.get_season_history(team_id)
+
+    prices = {p.id: p.now_cost for p in bootstrap.elements}
+    picks = [
+        {
+            "element": pk.element,
+            "position": pk.position,
+            "is_captain": pk.is_captain,
+            "is_vice_captain": pk.is_vice_captain,
+            "selling_price": prices.get(pk.element, 0),
+        }
+        for pk in squad.picks
+    ]
+
+    # 1 FT granted per GW from GW2, bankable to 5 (chips not modelled)
+    free = 1
+    for ev in (history.get("current") or [])[1:]:
+        free = min(5, max(1, free - ev.get("event_transfers", 0) + 1))
+
+    used_chips = {c.get("name") for c in history.get("chips") or []}
+    chips = [
+        {"name": c.name, "status_for_entry": "played" if c.name in used_chips else "available"}
+        for c in bootstrap.chips
+    ]
+
+    my_team = {
+        "picks": picks,
+        "transfers": {"limit": free, "bank": squad.entry_history.bank},
+        "chips": chips,
+    }
+    result = await _build_recommendations(my_team, bootstrap, fixtures)
+    result["preview"] = True
+    result["note"] = "Selling prices approximated by current price; free transfers estimated."
+    return result
 
 
 # ---------------------------------------------------------------------------
