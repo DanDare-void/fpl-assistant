@@ -446,3 +446,66 @@ async def confirm_captain(body: ConfirmCaptainRequest) -> dict:
 
     logger.info("Captain set to %s, VC to %s for team %s", body.captain_id, body.vice_captain_id, team_id)
     return {"status": "confirmed", "result": result}
+
+
+class ConfirmLineupRequest(BaseModel):
+    starters: list[int]  # 11 element ids
+    bench: list[int]  # 4 element ids in bench order, GK first
+    captain_id: int
+    vice_captain_id: int
+
+
+@router.post("/api/manage/lineup/confirm")
+async def confirm_lineup(body: ConfirmLineupRequest) -> dict:
+    """Set the full lineup: starting XI, bench order, captain and vice."""
+    session = _require_auth()
+    team_id = _team_id()
+
+    async with FPLWriter(session) as writer:
+        try:
+            my_team = await writer.get_my_team(team_id)
+        except FPLWriteError as exc:
+            raise HTTPException(status_code=401, detail=str(exc))
+
+    squad_ids = {p["element"] for p in my_team.get("picks", [])}
+    requested = body.starters + body.bench
+    if len(body.starters) != 11 or len(body.bench) != 4 or set(requested) != squad_ids or len(set(requested)) != 15:
+        raise HTTPException(
+            status_code=400,
+            detail="starters (11) + bench (4) must be exactly the 15 players in the squad.",
+        )
+    for pid, label in [(body.captain_id, "captain"), (body.vice_captain_id, "vice-captain")]:
+        if pid not in body.starters:
+            raise HTTPException(status_code=400, detail=f"Player {pid} must be a starter to be {label}.")
+
+    bootstrap, _, _ = await _load_fpl_data()
+    etype = {p.id: p.element_type for p in bootstrap.elements}
+
+    # Formation checks; FPL validates too, but fail fast with a clear message
+    counts = {t: sum(1 for pid in body.starters if etype[pid] == t) for t in (1, 2, 3, 4)}
+    if counts[1] != 1 or not (3 <= counts[2] <= 5) or not (2 <= counts[3] <= 5) or not (1 <= counts[4] <= 3):
+        raise HTTPException(status_code=400, detail=f"Invalid formation: {counts}")
+    if etype[body.bench[0]] != 1:
+        raise HTTPException(status_code=400, detail="First bench slot must be the backup goalkeeper.")
+
+    # Positions 1-11: XI ordered GK, DEF, MID, FWD (stable within input order)
+    ordered_xi = sorted(body.starters, key=lambda pid: etype[pid])
+    picks = []
+    for pos, pid in enumerate(ordered_xi + body.bench, start=1):
+        is_cap = pid == body.captain_id
+        picks.append({
+            "element": pid,
+            "position": pos,
+            "is_captain": is_cap,
+            "is_vice_captain": pid == body.vice_captain_id,
+            "multiplier": 2 if is_cap else (0 if pos > 11 else 1),
+        })
+
+    async with FPLWriter(session) as writer:
+        try:
+            result = await writer.update_team(team_id=team_id, picks=picks)
+        except FPLWriteError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+
+    logger.info("Lineup set for team %s: XI %s, bench %s", team_id, ordered_xi, body.bench)
+    return {"status": "confirmed", "result": result}
