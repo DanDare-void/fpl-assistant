@@ -1,20 +1,20 @@
 #!/usr/bin/env bash
-# Build the fpl-assistant image natively on keel-w5 and roll it out on the
+# Build the fpl-assistant image natively on keel-db and roll it out on the
 # cluster. Run from anywhere on the management box (Beelink/WSL).
 #
 #   scripts/deploy-cluster.sh
 #
-# Steps: rsync source -> keel-w5, podman build (arm64, native), import the
+# Steps: rsync source -> keel-db, podman build (arm64, native), import the
 # image into k3s containerd, apply manifests, restart the deployment.
 set -euo pipefail
 
-NODE="${NODE:-192.168.50.45}"                # keel-w5
+NODE="${NODE:-192.168.50.6}"                 # keel-db (ADR 0008; was keel-w5 .45)
 KEY="$HOME/.ssh/void_runner"
 SSH=(ssh -i "$KEY" "andrew@$NODE")
 REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 IMAGE="localhost/fpl-assistant:dev"
 
-echo "==> Syncing source to keel-w5"
+echo "==> Syncing source to keel-db"
 "${SSH[@]}" "mkdir -p build/fpl-assistant"
 rsync -az --delete \
   --exclude .git --exclude venv --exclude data --exclude logs --exclude .env \

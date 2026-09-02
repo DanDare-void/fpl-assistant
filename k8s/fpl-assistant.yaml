@@ -1,12 +1,13 @@
-# FPL assistant — API + frontend, single replica pinned to keel-w5.
+# FPL assistant — API + frontend, single replica pinned to keel-db.
 #
-# The image is built natively on keel-w5 and imported straight into k3s's
+# The image is built natively on keel-db and imported straight into k3s's
 # containerd (no registry) — see scripts/deploy-cluster.sh. Hence
 # imagePullPolicy: Never and the localhost/ image name podman assigns.
 #
-# Pinned to keel-w5 because SQLite lives on a local-path PV, which is
-# node-local; keel-w5 has the NVMe disk. Strategy is Recreate so two pods
-# never share the SQLite file.
+# Pinned to keel-db (the storage tier, keel-cluster ADR 0008; moved from
+# keel-w5 on 2026-09-02) because SQLite lives on a local-path PV, which is
+# node-local. keel-db carries a dedicated=db:NoSchedule taint, hence the
+# toleration. Strategy is Recreate so two pods never share the SQLite file.
 #
 # The Secret fpl-assistant-env is created from the local .env and never
 # committed:
@@ -44,7 +45,12 @@ spec:
         app: fpl-assistant
     spec:
       nodeSelector:
-        kubernetes.io/hostname: keel-w5
+        kubernetes.io/hostname: keel-db
+      tolerations:
+        - key: dedicated
+          operator: Equal
+          value: db
+          effect: NoSchedule
       containers:
         - name: fpl-assistant
           image: localhost/fpl-assistant:dev

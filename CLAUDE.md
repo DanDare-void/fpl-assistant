@@ -198,10 +198,11 @@ The app runs on the home k3s cluster (repo: `~/projects/keel-cluster`) as a sing
 pinned Deployment. See `docs/adr/DECISIONS.md` ADR 0002 for the full rationale.
 
 - **URL:** `http://192.168.50.46:30080` (NodePort — any node IP works, LAN only)
-- **Manifests:** `k8s/fpl-assistant.yaml` (namespace `football`, pinned to keel-w5,
-  SQLite on a `local-path` PV at `/app/data`)
+- **Manifests:** `k8s/fpl-assistant.yaml` (namespace `football`, pinned to keel-db —
+  the storage tier per keel-cluster ADR 0008, moved from keel-w5 on 2026-09-02; the
+  pod carries the `dedicated=db` toleration; SQLite on a `local-path` PV at `/app/data`)
 - **Secret:** `fpl-assistant-env`, created from the local `.env`, never committed
-- **Deploy/update:** `scripts/deploy-cluster.sh` — rsyncs source to keel-w5, builds
+- **Deploy/update:** `scripts/deploy-cluster.sh` — rsyncs source to keel-db, builds
   the `Dockerfile` there with podman (native arm64), imports the image into k3s
   containerd (no registry), applies manifests, restarts the deployment
 - The Haaland watch CronJob (`k8s/haaland-watch-cronjob.yaml`) is separate and
