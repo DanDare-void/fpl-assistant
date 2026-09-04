@@ -76,7 +76,13 @@ class FPLWriter:
             if resp.status_code == 401:
                 raise FPLWriteError("Token expired or invalid. Please re-authenticate.")
             if resp.status_code in (200, 201, 202):
-                return resp.json()
+                # FPL's transfers/ endpoint returns 200 with an empty body on success
+                if not resp.content.strip():
+                    return {}
+                try:
+                    return resp.json()
+                except ValueError:
+                    return {"raw": resp.text}
             try:
                 detail = resp.json()
             except Exception:

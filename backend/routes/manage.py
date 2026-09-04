@@ -142,7 +142,10 @@ async def _build_recommendations(my_team: dict, bootstrap: Bootstrap, fixtures: 
     # Pre-compute everything — Claude does zero arithmetic, zero estimation
     # ---------------------------------------------------------------------------
     transfers_info = my_team.get("transfers", {})
-    free_transfers = transfers_info.get("limit") or transfers_info.get("free") or 1
+    # my-team reports the GW allowance as `limit` and how many are already
+    # used as `made`; the remaining free transfers are the difference.
+    limit = transfers_info.get("limit") or transfers_info.get("free") or 1
+    free_transfers = max(limit - transfers_info.get("made", 0), 0)
     bank_tenths = transfers_info.get("bank", 0)
     bank_m = round(bank_tenths / 10, 1)
 
@@ -180,6 +183,12 @@ async def _build_recommendations(my_team: dict, bootstrap: Bootstrap, fixtures: 
 
     max_budget_tenths = bank_tenths + sum(p["selling_price"] for p in picks)
 
+    # FPL allows at most 3 players from one club. A target only fits if its
+    # club has fewer than 3 in the squad once the outgoing player leaves.
+    club_counts: dict[str, int] = {}
+    for sp in squad_with_prices:
+        club_counts[sp["team"]] = club_counts.get(sp["team"], 0) + 1
+
     viable_transfers: list[dict] = []
     for p in picks:
         ep_out = player_map.get(p["element"], {})
@@ -187,6 +196,7 @@ async def _build_recommendations(my_team: dict, bootstrap: Bootstrap, fixtures: 
         pos = ep_out.get("position", "?")
         out_form = ep_out.get("form", 0.0)
         out_fdr = ep_out.get("avg_fdr_3gw", 3.0)
+        out_team = ep_out.get("team", "?")
 
         targets = top_transfer_targets(enriched, position=pos, limit=20)
         for t in targets:
@@ -194,6 +204,9 @@ async def _build_recommendations(my_team: dict, bootstrap: Bootstrap, fixtures: 
                 continue
             cost_tenths = round(t["cost"] * 10)
             if cost_tenths > max_budget_tenths:
+                continue
+            club_after = club_counts.get(t["team"], 0) - (1 if t["team"] == out_team else 0)
+            if club_after >= 3:
                 continue
             net_cost_m = round(t["cost"] - selling_m, 1)
             form_gain = round(t["form"] - out_form, 1)
@@ -407,9 +420,17 @@ async def confirm_transfers(body: ConfirmTransferRequest) -> dict:
     current_elements = {p["element"] for p in my_team.get("picks", [])}
     selling_price_map = {p["element"]: p["selling_price"] for p in my_team.get("picks", [])}
     purchase_price_map = {p.id: p.now_cost for p in bootstrap.elements}
+    team_of = {p.id: p.team for p in bootstrap.elements}
+    team_name = {t.id: t.short_name for t in bootstrap.teams}
 
     # Running bank balance in tenths — simulate each transfer in sequence
     bank = my_team.get("transfers", {}).get("bank", 0)
+
+    # Running club counts — FPL rejects the whole batch if any club exceeds 3,
+    # so catch it here with a readable message instead of a raw API error
+    club_counts: dict[int, int] = {}
+    for pid in current_elements:
+        club_counts[team_of.get(pid, 0)] = club_counts.get(team_of.get(pid, 0), 0) + 1
 
     resolved = []
     for t in body.transfers:
@@ -448,6 +469,21 @@ async def confirm_transfers(body: ConfirmTransferRequest) -> dict:
                 ),
             )
         bank = balance_after
+        # Club limit check
+        club_out = team_of.get(t["element_out"])
+        club_in = team_of.get(t["element_in"])
+        club_counts[club_out] = club_counts.get(club_out, 0) - 1
+        club_counts[club_in] = club_counts.get(club_in, 0) + 1
+        if club_counts[club_in] > 3:
+            p_in = next((p for p in bootstrap.elements if p.id == t["element_in"]), None)
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"Club limit: bringing in {p_in.web_name if p_in else t['element_in']} "
+                    f"would give you {club_counts[club_in]} {team_name.get(club_in, '?')} players "
+                    f"(max 3)."
+                ),
+            )
         resolved.append({
             "element_in": t["element_in"],
             "element_out": t["element_out"],

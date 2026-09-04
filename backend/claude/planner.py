@@ -40,6 +40,9 @@ TRANSFER SELECTION ALGORITHM (follow exactly, and DO THE MATHS BEFORE CHOOSING):
    - Also SKIP it if its in_player is already being brought in by a transfer you
      selected earlier, or its out_player has already been sold. A player can only
      be bought once and sold once.
+   - Also SKIP it if selecting it would leave more than 3 players from one club
+     in the squad. Each option is individually legal, but two selected options
+     bringing in the same club can still breach the limit together.
 4. Stop when you have used all free_transfers (additional transfers cost 4 points each — only take a hit if clearly worthwhile)
 5. Do NOT invent players. Do NOT invent prices. Use ONLY the exact values from the lists provided.
 6. net_cost_millions is pre-computed and exact — do not recalculate it.
