@@ -141,6 +141,24 @@ Verify before responding:
 """
 
 
+
+def _extract_json_object(raw: str) -> dict:
+    """Pull the first JSON object out of a Claude reply.
+
+    Tolerates markdown fences, prose before the object, and prose after it
+    (Claude sometimes appends commentary despite "JSON only" instructions —
+    json.loads() rejects that as "Extra data").
+    """
+    if raw.startswith("```"):
+        raw = raw.split("\n", 1)[1].rsplit("```", 1)[0].strip()
+    start = raw.find("{")
+    if start == -1:
+        raise ValueError("no JSON object found")
+    result, _ = json.JSONDecoder().raw_decode(raw, start)
+    if not isinstance(result, dict):
+        raise ValueError("top-level JSON value is not an object")
+    return result
+
 async def generate_squad(
     budget_millions: float,
     candidates: dict[str, list[dict]],
@@ -181,17 +199,11 @@ async def generate_squad(
         if not raw:
             raise RuntimeError(f"Claude returned empty response (stop_reason={response.stop_reason})")
 
-        if raw.startswith("```"):
-            raw = raw.split("\n", 1)[1].rsplit("```", 1)[0].strip()
-
-        if not raw.startswith("{"):
-            start = raw.find("{")
-            end = raw.rfind("}")
-            if start == -1 or end == -1:
-                raise RuntimeError("Claude did not return a JSON object for squad builder.")
-            raw = raw[start:end + 1]
-
-        result = json.loads(raw)
+        try:
+            result = _extract_json_object(raw)
+        except ValueError as exc:
+            logger.error("No JSON object in squad builder response (%s): %.500r", exc, raw)
+            raise RuntimeError("Claude did not return a JSON object for squad builder.") from exc
 
         # Server-side verify total cost
         if "squad" in result:
@@ -268,20 +280,11 @@ async def generate_recommendations(
         if not raw:
             raise RuntimeError(f"Claude returned an empty response (stop_reason={response.stop_reason}). Try again.")
 
-        # Strip markdown fences if present
-        if raw.startswith("```"):
-            raw = raw.split("\n", 1)[1].rsplit("```", 1)[0].strip()
-
-        # If Claude wrote prose before the JSON, find the first { and last }
-        if not raw.startswith("{"):
-            start = raw.find("{")
-            end = raw.rfind("}")
-            if start == -1 or end == -1:
-                logger.error("No JSON object found in Claude response: %.500r", raw)
-                raise RuntimeError("Claude did not return a JSON object in its response.")
-            raw = raw[start:end + 1]
-
-        result = json.loads(raw)
+        try:
+            result = _extract_json_object(raw)
+        except ValueError as exc:
+            logger.error("No JSON object in Claude response (%s): %.500r", exc, raw)
+            raise RuntimeError("Claude did not return a JSON object in its response.") from exc
 
         # Server-side verify Claude's budget_check arithmetic
         if "budget_check" in result and "transfers" in result:
