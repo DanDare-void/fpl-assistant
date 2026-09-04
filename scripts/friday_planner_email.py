@@ -125,6 +125,11 @@ def main():
     try:
         verdict, body = build_report()
         subject = f'FPL Friday plan — {verdict}'
+        # Optional preamble, e.g. for a manual resend explaining why
+        note = os.environ.get('REPORT_NOTE', '').strip()
+        if note:
+            body = f'{note}\n\n{body}'
+            subject += ' (resent)'
     except Exception:
         body = ('The Friday planner cron failed:\n\n' + traceback.format_exc()
                 + '\nCheck: kubectl -n football logs job/<latest friday-planner job>')
