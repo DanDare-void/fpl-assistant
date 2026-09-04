@@ -29,20 +29,43 @@ You are an expert FPL analyst. You will be given:
 
 Your job: select transfers greedily from the ranked list, then pick a captain.
 
-TRANSFER SELECTION ALGORITHM (follow exactly):
+TRANSFER SELECTION ALGORITHM (follow exactly, and DO THE MATHS BEFORE CHOOSING):
 1. Start with running_budget = bank_millions
 2. Work through ranked_transfer_options from rank 1 downward (highest impact first)
-3. For each option: check if (running_budget + out_selling_price_millions - in_cost_millions) >= 0
-   - If YES: select this transfer, update running_budget += out_selling_price_millions - in_cost_millions, continue
-   - If NO: skip this option, keep looking for one that fits
+3. For each option: after = running_budget - net_cost_millions
+   - If after >= 0: SELECT it, set running_budget = after, continue
+   - If after < 0: SKIP it and move on. Do NOT select it on the assumption that a
+     later, cheaper transfer will pay for it — the walk is strictly in rank order and
+     money only ever flows forward.
+   - Also SKIP it if its in_player is already being brought in by a transfer you
+     selected earlier, or its out_player has already been sold. A player can only
+     be bought once and sold once.
 4. Stop when you have used all free_transfers (additional transfers cost 4 points each — only take a hit if clearly worthwhile)
 5. Do NOT invent players. Do NOT invent prices. Use ONLY the exact values from the lists provided.
 6. net_cost_millions is pre-computed and exact — do not recalculate it.
 
-You MUST respond with valid JSON only — no prose, no markdown fences.
+The JSON schema below puts "budget_walk" FIRST so that you write the arithmetic
+down before you commit to any transfer. Fill it in one row per option you
+consider, in rank order, stopping once free transfers are exhausted or the list
+ends. "transfers" must then contain exactly the rows where selected is true —
+nothing else. Decide once; never revise a decision later in the output.
+
+You MUST respond with valid JSON only — no prose, no markdown fences, nothing
+before the opening brace or after the closing brace.
 The JSON must match this exact schema:
 
 {
+  "budget_walk": [
+    {
+      "rank": <int>,
+      "out_player_name": "<str>",
+      "in_player_name": "<str>",
+      "budget_before": <float>,
+      "net_cost_millions": <float>,
+      "budget_after": <float>,
+      "selected": <bool>
+    }
+  ],
   "captain": {
     "player_id": <int>,
     "player_name": "<str>",
@@ -81,11 +104,18 @@ Additional rules:
 - captain and vice_captain MUST be players currently in current_squad.
 - transfers may be [] if no moves are worthwhile.
 - chip name must be one of: __CHIP_OPTIONS__, or null.
+- budget_walk: budget_after = budget_before - net_cost_millions; selected is true only
+  when budget_after >= 0 and neither player already appears in a selected row.
+  The next row's budget_before is the previous row's budget_after if that row was
+  selected, otherwise its budget_before.
+- transfers: exactly the budget_walk rows with selected true, in the same order.
 - budget_check: fill in with the exact values from your selected transfers.
   total_sold_millions = sum of out_selling_price_millions for selected transfers.
   total_bought_millions = sum of in_cost_millions for selected transfers.
   remaining_bank_millions = bank_millions + total_sold_millions - total_bought_millions.
-- This must satisfy: remaining_bank_millions >= 0. If it does not, remove the last transfer.
+  This must equal the last selected row's budget_after and must be >= 0.
+- summary: describe the final decisions only. Do not reconsider, correct, or
+  contradict anything above — the budget_walk is where the thinking happens.
 """
 
 
@@ -257,9 +287,10 @@ async def generate_recommendations(
         f"Free transfers available at zero cost: {free_transfers}\n\n"
         f"Planning data (all prices exact — use them verbatim, do not recalculate):\n"
         f"```json\n{json.dumps(planning_data, indent=2)}\n```\n\n"
-        "Output the JSON object directly. Do not explain your reasoning, do not use markdown. "
-        "Select transfers greedily from ranked_transfer_options (highest impact_score first): "
-        "accumulate running_budget = bank + sum(out prices) - sum(in prices); include a transfer only if running_budget >= 0 after it. "
+        "Output the JSON object directly, no markdown. Start with budget_walk: walk "
+        "ranked_transfer_options in rank order from bank_millions, subtracting each "
+        "net_cost_millions, and select a transfer only if the budget stays >= 0 after it. "
+        "Only then fill in transfers, captain, and the rest. "
         "Use exact prices from the data — never estimate or recalculate."
     )
 
@@ -285,6 +316,30 @@ async def generate_recommendations(
         except ValueError as exc:
             logger.error("No JSON object in Claude response (%s): %.500r", exc, raw)
             raise RuntimeError("Claude did not return a JSON object in its response.") from exc
+
+        # Server-side guard: a player can only be bought once / sold once.
+        # The ranked options list offers the same target for several outgoing
+        # players, and Claude has selected two of them before.
+        if isinstance(result.get("transfers"), list):
+            seen_in: set[int] = set()
+            seen_out: set[int] = set()
+            kept = []
+            for t in result["transfers"]:
+                if t.get("in_player_id") in seen_in or t.get("out_player_id") in seen_out:
+                    logger.warning(
+                        "Dropping duplicate transfer %s -> %s",
+                        t.get("out_player_name"), t.get("in_player_name"),
+                    )
+                    continue
+                seen_in.add(t.get("in_player_id"))
+                seen_out.add(t.get("out_player_id"))
+                kept.append(t)
+            if len(kept) != len(result["transfers"]):
+                result["transfers"] = kept
+                result["_duplicate_warning"] = (
+                    "Claude proposed the same player in more than one transfer — "
+                    "duplicates removed, review the summary with that in mind."
+                )
 
         # Server-side verify Claude's budget_check arithmetic
         if "budget_check" in result and "transfers" in result:

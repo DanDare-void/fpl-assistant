@@ -315,6 +315,9 @@ function RecommendationsPanel({ data, onLogout }) {
         {recs._budget_warning && (
           <p className="text-xs text-yellow-400 font-medium">{recs._budget_warning}</p>
         )}
+        {recs._duplicate_warning && (
+          <p className="text-xs text-yellow-400 font-medium">{recs._duplicate_warning}</p>
+        )}
       </div>
 
       {error && <p className="text-red-400 text-sm">{error}</p>}

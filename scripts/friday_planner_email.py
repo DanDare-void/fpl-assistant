@@ -98,8 +98,9 @@ def build_report():
     if bc:
         lines.append(f"  budget: bank {bc.get('bank_millions')} + sold {bc.get('total_sold_millions')} "
                      f"- bought {bc.get('total_bought_millions')} = {bc.get('remaining_bank_millions')} left")
-    if recs.get('_budget_warning'):
-        lines.append(f"  !! {recs['_budget_warning']}")
+    for key in ('_budget_warning', '_duplicate_warning'):
+        if recs.get(key):
+            lines.append(f"  !! {recs[key]}")
     lines.append('')
 
     chip = (recs.get('chip') or {})
