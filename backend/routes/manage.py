@@ -224,20 +224,34 @@ async def _build_recommendations(my_team: dict, bootstrap: Bootstrap, fixtures: 
     # Sort by impact descending — Claude works down this list greedily
     viable_transfers.sort(key=lambda x: x["impact_score"], reverse=True)
 
-    # Deduplicate: only keep the best target per out-player (to avoid noise)
-    # Claude can still pick a different target if it sees fit, but the top option is clear
+    # Deduplicate so any subset Claude selects is a legal set of moves:
+    #   tier 1 — best pairing per out-player, with each in-player used at most
+    #            once across the tier (a target that is best for two squad
+    #            players goes to the higher-impact pairing; the other player
+    #            gets their next-best target)
+    #   tier 2 — up to 20 alternatives for out-players, each introducing an
+    #            in-player not seen anywhere else in the list
+    # Net effect: every in-player appears exactly once, so the same target can
+    # never be bought twice; out-players may recur only in tier 2.
     seen_out: set[int] = set()
+    seen_in: set[int] = set()
     top_per_player: list[dict] = []
     rest: list[dict] = []
     for vt in viable_transfers:
+        if vt["in_player_id"] in seen_in:
+            continue
         if vt["out_player_id"] not in seen_out:
             top_per_player.append(vt)
             seen_out.add(vt["out_player_id"])
-        else:
-            rest.append(vt)
+            seen_in.add(vt["in_player_id"])
+    for vt in viable_transfers:
+        if vt["in_player_id"] in seen_in or len(rest) >= 20:
+            continue
+        rest.append(vt)
+        seen_in.add(vt["in_player_id"])
 
     # Final ranked list: best option per player first, then alternatives
-    ranked_transfers = top_per_player + rest[:20]
+    ranked_transfers = top_per_player + rest
 
     # Chips playable next GW: bootstrap defines each chip's window; the
     # my-team response is authoritative on which the entry has already used.

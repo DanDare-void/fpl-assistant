@@ -318,8 +318,9 @@ async def generate_recommendations(
             raise RuntimeError("Claude did not return a JSON object in its response.") from exc
 
         # Server-side guard: a player can only be bought once / sold once.
-        # The ranked options list offers the same target for several outgoing
-        # players, and Claude has selected two of them before.
+        # The ranked options list is built so in-players are unique, but
+        # out-players can recur in the alternatives tier and Claude has
+        # ignored the "buy once" rule before — belt and braces.
         if isinstance(result.get("transfers"), list):
             seen_in: set[int] = set()
             seen_out: set[int] = set()
